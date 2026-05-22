@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WP Claude Agent
  * Description: Connects this WordPress site to Claude Code via a session token + REST API. Lets Claude read/write files, run DB queries, eval PHP, manage plugins/options, and upload media. FULL POWER — use only on sites you own.
- * Version: 1.2.0
+ * Version: 1.3.0
  * Author: ClientsNow
  * License: GPL-2.0+
  */
@@ -26,7 +26,7 @@ define( 'CLAUDE_BRIDGE_DEFAULT_TTL', 8 * HOUR_IN_SECONDS );        // session le
 define( 'CLAUDE_BRIDGE_LOG_MAX', 60 );                             // audit entries kept
 define( 'CLAUDE_BRIDGE_MAX_FAILS', 8 );                            // failed token tries...
 define( 'CLAUDE_BRIDGE_LOCKOUT', 15 * MINUTE_IN_SECONDS );         // ...before IP lockout
-define( 'CLAUDE_BRIDGE_VERSION', '1.2.0' );                        // keep in sync with header
+define( 'CLAUDE_BRIDGE_VERSION', '1.3.0' );                        // keep in sync with header
 
 /* -------------------------------------------------------------------------
  * Self-hosted auto-update (polls a channel.json manifest)
@@ -192,7 +192,7 @@ function claude_bridge_check_auth( WP_REST_Request $request ) {
 
 	// Master kill switch.
 	if ( ! get_option( CLAUDE_BRIDGE_OPT_ENABLED, 1 ) ) {
-		return new WP_Error( 'disabled', 'Claude Bridge is disabled.', array( 'status' => 403 ) );
+		return new WP_Error( 'disabled', 'WP Claude Agent is disabled.', array( 'status' => 403 ) );
 	}
 
 	// IP allowlist: when configured, only listed IPs may use the bridge — a valid
@@ -200,7 +200,7 @@ function claude_bridge_check_auth( WP_REST_Request $request ) {
 	$allow = claude_bridge_ip_allowlist();
 	if ( ! empty( $allow ) && ! in_array( $ip, $allow, true ) ) {
 		claude_bridge_log( 'ip.blocked', array(), $ip );
-		return new WP_Error( 'ip_blocked', 'Your IP is not allowlisted for Claude Bridge.', array( 'status' => 403 ) );
+		return new WP_Error( 'ip_blocked', 'Your IP is not allowlisted for WP Claude Agent.', array( 'status' => 403 ) );
 	}
 
 	// Brute-force lockout.
@@ -213,11 +213,27 @@ function claude_bridge_check_auth( WP_REST_Request $request ) {
 		return new WP_Error( 'insecure', 'HTTPS required.', array( 'status' => 403 ) );
 	}
 
+	// Static token mode: a permanent token defined in wp-config.php
+	// ( define( 'CLAUDE_BRIDGE_STATIC_TOKEN', '...' ); ). Set-and-forget — no
+	// expiry and no single-client lock, so the MCP config never changes. Access
+	// is still gated by the IP allowlist above and the brute-force lockout.
+	// When this constant is set it fully governs auth; the session-key flow is skipped.
+	if ( defined( 'CLAUDE_BRIDGE_STATIC_TOKEN' ) && CLAUDE_BRIDGE_STATIC_TOKEN ) {
+		$token = claude_bridge_get_bearer( $request );
+		if ( $token && hash_equals( (string) CLAUDE_BRIDGE_STATIC_TOKEN, $token ) ) {
+			claude_bridge_clear_fails( $ip );
+			return true;
+		}
+		$n = claude_bridge_record_fail( $ip );
+		claude_bridge_log( 'auth.fail', array( 'attempt' => $n, 'mode' => 'static' ), $ip );
+		return new WP_Error( 'bad_token', 'Invalid token.', array( 'status' => 403 ) );
+	}
+
 	$hash = get_option( CLAUDE_BRIDGE_OPT_HASH );
 	$exp  = (int) get_option( CLAUDE_BRIDGE_OPT_EXP );
 
 	if ( empty( $hash ) ) {
-		return new WP_Error( 'no_token', 'No session token active. Generate one in WP admin → Tools → Claude Bridge.', array( 'status' => 401 ) );
+		return new WP_Error( 'no_token', 'No session token active. Generate one in WP admin → Tools → WP Claude Agent.', array( 'status' => 401 ) );
 	}
 	if ( time() > $exp ) {
 		claude_bridge_revoke_token();
@@ -647,11 +663,11 @@ function claude_bridge_ep_media_upload( WP_REST_Request $r ) {
 }
 
 /* -------------------------------------------------------------------------
- * Admin UI — Tools → Claude Bridge
+ * Admin UI — Tools → WP Claude Agent
  * ---------------------------------------------------------------------- */
 
 add_action( 'admin_menu', function () {
-	add_management_page( 'Claude Bridge', 'Claude Bridge', 'manage_options', 'claude-bridge', 'claude_bridge_admin_page' );
+	add_management_page( 'WP Claude Agent', 'WP Claude Agent', 'manage_options', 'claude-bridge', 'claude_bridge_admin_page' );
 } );
 
 function claude_bridge_admin_page() {
@@ -710,7 +726,7 @@ function claude_bridge_admin_page() {
 		.cb-cap{columns:2;font-size:13px;color:#444}
 	</style>
 	<div class="wrap cb-wrap">
-		<h1>🔌 Claude Bridge</h1>
+		<h1>🔌 WP Claude Agent</h1>
 
 		<div class="cb-card cb-danger">
 			<strong style="color:#b32d2e">⚠ Full access:</strong> a session token grants complete file, database and PHP (RCE) control of this site. Share only with your own Claude Code. Generating a new key kills the old one; one client may use a token at a time.
