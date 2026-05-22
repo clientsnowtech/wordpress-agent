@@ -1,0 +1,16 @@
+{
+  "name": "Claude Bridge",
+  "slug": "claude-bridge",
+  "version": "1.1.0",
+  "download_url": "https://github.com/clientsnowtech/wordpress-agent/releases/download/v1.1.0/claude-bridge.zip",
+  "homepage": "https://clientsnow.in",
+  "author": "ClientsNow",
+  "requires": "5.8",
+  "tested": "6.7",
+  "requires_php": "7.4",
+  "last_updated": "2026-05-22 12:00:00",
+  "sections": {
+    "description": "Connects this WordPress site to Claude Code via a session token + REST API.",
+    "changelog": "<h4>1.1.0</h4><ul><li>Self-hosted auto-update via channel.json.</li><li>Per-site changelog on the MCP side.</li></ul>"
+  }
+}

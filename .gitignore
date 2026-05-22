@@ -1,0 +1,12 @@
+# deps
+node_modules/
+
+# build artifacts / release assets (uploaded to GitHub Releases, not committed)
+*.zip
+
+# per-site chat changelogs (local/Drive only, not for the public repo)
+sites/
+
+# OS / editor
+.DS_Store
+Thumbs.db
