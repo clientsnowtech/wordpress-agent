@@ -49,7 +49,11 @@ class Claude_Bridge_Updater {
 	}
 
 	private function resolve_manifest_url() {
+		// wp-config constant wins; otherwise the admin-set option.
 		$url = defined( 'CLAUDE_BRIDGE_UPDATE_MANIFEST' ) ? CLAUDE_BRIDGE_UPDATE_MANIFEST : '';
+		if ( ! $url && defined( 'CLAUDE_BRIDGE_OPT_MANIFEST' ) ) {
+			$url = (string) get_option( CLAUDE_BRIDGE_OPT_MANIFEST, '' );
+		}
 		return apply_filters( 'claude_bridge_update_manifest', $url );
 	}
 

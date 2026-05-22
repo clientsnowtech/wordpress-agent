@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WP Claude Agent
  * Description: Connects this WordPress site to Claude Code via a session token + REST API. Lets Claude read/write files, run DB queries, eval PHP, manage plugins/options, and upload media. FULL POWER — use only on sites you own.
- * Version: 1.3.0
+ * Version: 1.4.0
  * Author: ClientsNow
  * License: GPL-2.0+
  */
@@ -19,6 +19,8 @@ define( 'CLAUDE_BRIDGE_OPT_TTL', 'claude_bridge_ttl_seconds' );    // chosen ses
 define( 'CLAUDE_BRIDGE_OPT_ENABLED', 'claude_bridge_enabled' );    // master kill switch
 define( 'CLAUDE_BRIDGE_OPT_REQUIRE_HTTPS', 'claude_bridge_require_https' );
 define( 'CLAUDE_BRIDGE_OPT_ALLOWLIST', 'claude_bridge_ip_allowlist' );  // IP allowlist (admin/option)
+define( 'CLAUDE_BRIDGE_OPT_STATIC', 'claude_bridge_static_token' );    // permanent token (admin/option)
+define( 'CLAUDE_BRIDGE_OPT_MANIFEST', 'claude_bridge_manifest_url' );  // update manifest URL (admin/option)
 define( 'CLAUDE_BRIDGE_OPT_LOG', 'claude_bridge_audit_log' );      // recent operations
 define( 'CLAUDE_BRIDGE_OPT_BACKUPS', 'claude_bridge_backups' );    // file-change backup index
 define( 'CLAUDE_BRIDGE_BACKUP_MAX', 100 );                        // backups kept
@@ -26,7 +28,7 @@ define( 'CLAUDE_BRIDGE_DEFAULT_TTL', 8 * HOUR_IN_SECONDS );        // session le
 define( 'CLAUDE_BRIDGE_LOG_MAX', 60 );                             // audit entries kept
 define( 'CLAUDE_BRIDGE_MAX_FAILS', 8 );                            // failed token tries...
 define( 'CLAUDE_BRIDGE_LOCKOUT', 15 * MINUTE_IN_SECONDS );         // ...before IP lockout
-define( 'CLAUDE_BRIDGE_VERSION', '1.3.0' );                        // keep in sync with header
+define( 'CLAUDE_BRIDGE_VERSION', '1.4.0' );                        // keep in sync with header
 
 /* -------------------------------------------------------------------------
  * Self-hosted auto-update (polls a channel.json manifest)
@@ -213,14 +215,15 @@ function claude_bridge_check_auth( WP_REST_Request $request ) {
 		return new WP_Error( 'insecure', 'HTTPS required.', array( 'status' => 403 ) );
 	}
 
-	// Static token mode: a permanent token defined in wp-config.php
-	// ( define( 'CLAUDE_BRIDGE_STATIC_TOKEN', '...' ); ). Set-and-forget — no
-	// expiry and no single-client lock, so the MCP config never changes. Access
-	// is still gated by the IP allowlist above and the brute-force lockout.
-	// When this constant is set it fully governs auth; the session-key flow is skipped.
-	if ( defined( 'CLAUDE_BRIDGE_STATIC_TOKEN' ) && CLAUDE_BRIDGE_STATIC_TOKEN ) {
+	// Static token mode: a permanent token set either in the admin page (stored
+	// in an option) or via the CLAUDE_BRIDGE_STATIC_TOKEN wp-config constant.
+	// Set-and-forget — no expiry and no single-client lock, so the MCP config
+	// never changes. Access is still gated by the IP allowlist above and the
+	// brute-force lockout. When set it fully governs auth; session-key flow is skipped.
+	$static = claude_bridge_static_token();
+	if ( $static ) {
 		$token = claude_bridge_get_bearer( $request );
-		if ( $token && hash_equals( (string) CLAUDE_BRIDGE_STATIC_TOKEN, $token ) ) {
+		if ( $token && hash_equals( $static, $token ) ) {
 			claude_bridge_clear_fails( $ip );
 			return true;
 		}
@@ -282,6 +285,17 @@ function claude_bridge_ip_allowlist() {
 	}
 	$list = array_values( array_unique( array_filter( $list ) ) );
 	return apply_filters( 'claude_bridge_ip_allowlist', $list );
+}
+
+/**
+ * The permanent (static) token, if configured. wp-config constant
+ * CLAUDE_BRIDGE_STATIC_TOKEN wins; otherwise the admin option. Empty = disabled.
+ */
+function claude_bridge_static_token() {
+	if ( defined( 'CLAUDE_BRIDGE_STATIC_TOKEN' ) && CLAUDE_BRIDGE_STATIC_TOKEN ) {
+		return (string) CLAUDE_BRIDGE_STATIC_TOKEN;
+	}
+	return (string) get_option( CLAUDE_BRIDGE_OPT_STATIC, '' );
 }
 
 function claude_bridge_is_local_ip( $ip ) {
@@ -675,7 +689,8 @@ function claude_bridge_admin_page() {
 		wp_die( 'Forbidden' );
 	}
 
-	$new_token = null;
+	$new_token  = null;
+	$new_static = null;
 
 	if ( isset( $_POST['claude_bridge_action'] ) && check_admin_referer( 'claude_bridge_nonce' ) ) {
 		switch ( $_POST['claude_bridge_action'] ) {
@@ -695,6 +710,23 @@ function claude_bridge_admin_page() {
 			case 'clearlog':
 				update_option( CLAUDE_BRIDGE_OPT_LOG, array(), false );
 				break;
+			case 'settings':
+				update_option( CLAUDE_BRIDGE_OPT_ALLOWLIST, sanitize_text_field( wp_unslash( $_POST['allowlist'] ?? '' ) ), false );
+				update_option( CLAUDE_BRIDGE_OPT_MANIFEST, esc_url_raw( wp_unslash( $_POST['manifest'] ?? '' ) ), false );
+				break;
+			case 'settoken':
+				$provided = trim( (string) wp_unslash( $_POST['static_token'] ?? '' ) );
+				if ( '' === $provided ) {
+					$provided = bin2hex( random_bytes( 24 ) ); // generate when left blank
+				}
+				update_option( CLAUDE_BRIDGE_OPT_STATIC, $provided, false );
+				claude_bridge_log( 'token.static_set', array(), 'admin' );
+				$new_static = $provided;
+				break;
+			case 'cleartoken':
+				delete_option( CLAUDE_BRIDGE_OPT_STATIC );
+				claude_bridge_log( 'token.static_clear', array(), 'admin' );
+				break;
 		}
 	}
 
@@ -707,6 +739,10 @@ function claude_bridge_admin_page() {
 	$is_https   = ( strpos( $base_url, 'https://' ) === 0 );
 	$mcp_path   = wp_normalize_path( WP_PLUGIN_DIR ); // hint only
 	$log        = array_reverse( (array) get_option( CLAUDE_BRIDGE_OPT_LOG, array() ) );
+	$allowlist  = (string) get_option( CLAUDE_BRIDGE_OPT_ALLOWLIST, '' );
+	$manifest   = (string) get_option( CLAUDE_BRIDGE_OPT_MANIFEST, '' );
+	$static_set = (string) get_option( CLAUDE_BRIDGE_OPT_STATIC, '' ) !== '';
+	$static_const = defined( 'CLAUDE_BRIDGE_STATIC_TOKEN' ) && CLAUDE_BRIDGE_STATIC_TOKEN;
 	?>
 	<style>
 		.cb-wrap{max-width:920px}
@@ -794,6 +830,65 @@ function claude_bridge_admin_page() {
 				<?php submit_button( 'Revoke Active Token', 'delete', 'submit', false ); ?>
 			</form>
 			<?php endif; ?>
+		</div>
+
+		<?php if ( $new_static ) : ?>
+		<!-- NEW PERMANENT TOKEN -->
+		<div class="cb-card" style="border-color:#aedcb6">
+			<h2>✅ Permanent token set — copy now</h2>
+			<div class="cb-code" id="cb-stoken"><button type="button" class="cb-copy" data-copy="cb-stoken">Copy</button><?php echo esc_html( $new_static ); ?></div>
+			<p style="margin-bottom:6px">Paste into Claude Code once (one line) — never expires, so you set it only this once:</p>
+			<div class="cb-code" id="cb-scmd"><button type="button" class="cb-copy" data-copy="cb-scmd">Copy</button><?php
+				echo esc_html(
+					'claude mcp add wp-bridge '
+					. '--env WP_BRIDGE_URL=' . $base_url . ' '
+					. '--env WP_BRIDGE_TOKEN=' . $new_static . ' '
+					. '-- node "' . $mcp_path . '/../../wordpress-agent/mcp-server/index.js"'
+				);
+			?></div>
+			<p style="color:#777;font-size:12px">Adjust the path to wherever <code>mcp-server/index.js</code> lives on your machine.</p>
+		</div>
+		<?php endif; ?>
+
+		<!-- PERMANENT TOKEN -->
+		<div class="cb-card">
+			<h2>Permanent token <span style="font-weight:400;color:#777">(set once, no expiry)</span></h2>
+			<p style="color:#646970;font-size:13px;margin-top:0">
+				A permanent token never expires and isn't locked to one client, so you configure Claude Code <strong>once</strong> and never touch it again. Pair it with the IP allowlist below — that's what keeps it safe.
+				<?php echo $static_const ? '<br><span class="cb-badge cb-warn">overridden</span> a <code>CLAUDE_BRIDGE_STATIC_TOKEN</code> constant in wp-config.php is set and takes precedence over this field.' : ''; ?>
+			</p>
+			<div class="cb-grid" style="margin-bottom:12px">
+				<div>Status</div><div><?php echo ( $static_set || $static_const )
+					? '<span class="cb-badge cb-on">Active</span>' . ( $static_const ? ' (via wp-config)' : ' (set here)' )
+					: '<span class="cb-badge cb-off">Not set</span> — using session keys below'; ?></div>
+			</div>
+			<form method="post">
+				<?php wp_nonce_field( 'claude_bridge_nonce' ); ?>
+				<input type="hidden" name="claude_bridge_action" value="settoken" />
+				<input type="text" name="static_token" class="regular-text" placeholder="leave blank to auto-generate a strong token" style="width:100%;max-width:560px;font-family:Menlo,Consolas,monospace" />
+				<?php submit_button( $static_set ? 'Replace permanent token' : 'Set permanent token', 'primary', 'submit', false ); ?>
+			</form>
+			<?php if ( $static_set ) : ?>
+			<form method="post" style="margin-top:10px">
+				<?php wp_nonce_field( 'claude_bridge_nonce' ); ?>
+				<input type="hidden" name="claude_bridge_action" value="cleartoken" />
+				<?php submit_button( 'Remove permanent token', 'delete', 'submit', false ); ?>
+			</form>
+			<?php endif; ?>
+		</div>
+
+		<!-- CONNECTION SETTINGS -->
+		<div class="cb-card">
+			<h2>Connection settings <span style="font-weight:400;color:#777">(no wp-config / cPanel needed)</span></h2>
+			<form method="post">
+				<?php wp_nonce_field( 'claude_bridge_nonce' ); ?>
+				<input type="hidden" name="claude_bridge_action" value="settings" />
+				<p style="margin:0 0 4px"><strong>Allowed IPs</strong> <span style="color:#777;font-size:12px">— comma-separated. When set, only these IPs can connect (even with a valid token). Leave blank for no IP limit.</span></p>
+				<input type="text" name="allowlist" class="regular-text" value="<?php echo esc_attr( $allowlist ); ?>" placeholder="e.g. 106.201.228.92, 1.2.3.4" style="width:100%;max-width:560px" />
+				<p style="margin:14px 0 4px"><strong>Update manifest URL</strong> <span style="color:#777;font-size:12px">— for plugin auto-update. Usually the channel.json raw URL.</span></p>
+				<input type="url" name="manifest" class="regular-text" value="<?php echo esc_attr( $manifest ); ?>" placeholder="https://raw.githubusercontent.com/.../channel.json" style="width:100%;max-width:560px" />
+				<br><?php submit_button( 'Save settings', 'primary', 'submit', false ); ?>
+			</form>
 		</div>
 
 		<!-- SECURITY -->
