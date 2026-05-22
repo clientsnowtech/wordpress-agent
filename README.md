@@ -97,6 +97,17 @@ Token expired or new session? Repeat steps 2 and 4 (update `WP_BRIDGE_TOKEN`).
 Drop a screenshot or file into the Claude Code chat. Claude reads it (vision), figures out the
 change, then applies it on the site with the tools above — and can `wp_upload_media` to push assets.
 
+## Lock to specific IPs (recommended)
+Restrict the bridge so a valid token is useless from any other IP. Add to the site's
+`wp-config.php` (keep the actual IPs out of any repo — they live only on the server):
+
+```php
+define( 'CLAUDE_BRIDGE_IP_ALLOWLIST', 'YOUR.STATIC.IP.HERE' ); // comma-separate for several
+```
+
+When set, requests from any IP not in the list get HTTP 403 — even with a correct token.
+Leave it unset for token-only auth.
+
 ## Notes
 - If the site is on Apache and `Authorization` is stripped, the MCP server also sends
   `X-Claude-Token`; the plugin reads either.

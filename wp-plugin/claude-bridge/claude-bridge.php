@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: Claude Bridge
+ * Plugin Name: WP Claude Agent
  * Description: Connects this WordPress site to Claude Code via a session token + REST API. Lets Claude read/write files, run DB queries, eval PHP, manage plugins/options, and upload media. FULL POWER — use only on sites you own.
- * Version: 1.1.0
+ * Version: 1.2.0
  * Author: ClientsNow
  * License: GPL-2.0+
  */
@@ -18,6 +18,7 @@ define( 'CLAUDE_BRIDGE_OPT_CLIENT', 'claude_bridge_client_ip' );   // locks toke
 define( 'CLAUDE_BRIDGE_OPT_TTL', 'claude_bridge_ttl_seconds' );    // chosen session length
 define( 'CLAUDE_BRIDGE_OPT_ENABLED', 'claude_bridge_enabled' );    // master kill switch
 define( 'CLAUDE_BRIDGE_OPT_REQUIRE_HTTPS', 'claude_bridge_require_https' );
+define( 'CLAUDE_BRIDGE_OPT_ALLOWLIST', 'claude_bridge_ip_allowlist' );  // IP allowlist (admin/option)
 define( 'CLAUDE_BRIDGE_OPT_LOG', 'claude_bridge_audit_log' );      // recent operations
 define( 'CLAUDE_BRIDGE_OPT_BACKUPS', 'claude_bridge_backups' );    // file-change backup index
 define( 'CLAUDE_BRIDGE_BACKUP_MAX', 100 );                        // backups kept
@@ -25,7 +26,7 @@ define( 'CLAUDE_BRIDGE_DEFAULT_TTL', 8 * HOUR_IN_SECONDS );        // session le
 define( 'CLAUDE_BRIDGE_LOG_MAX', 60 );                             // audit entries kept
 define( 'CLAUDE_BRIDGE_MAX_FAILS', 8 );                            // failed token tries...
 define( 'CLAUDE_BRIDGE_LOCKOUT', 15 * MINUTE_IN_SECONDS );         // ...before IP lockout
-define( 'CLAUDE_BRIDGE_VERSION', '1.1.0' );                        // keep in sync with header
+define( 'CLAUDE_BRIDGE_VERSION', '1.2.0' );                        // keep in sync with header
 
 /* -------------------------------------------------------------------------
  * Self-hosted auto-update (polls a channel.json manifest)
@@ -194,6 +195,14 @@ function claude_bridge_check_auth( WP_REST_Request $request ) {
 		return new WP_Error( 'disabled', 'Claude Bridge is disabled.', array( 'status' => 403 ) );
 	}
 
+	// IP allowlist: when configured, only listed IPs may use the bridge — a valid
+	// token from any other IP is still rejected. Empty list = no IP restriction.
+	$allow = claude_bridge_ip_allowlist();
+	if ( ! empty( $allow ) && ! in_array( $ip, $allow, true ) ) {
+		claude_bridge_log( 'ip.blocked', array(), $ip );
+		return new WP_Error( 'ip_blocked', 'Your IP is not allowlisted for Claude Bridge.', array( 'status' => 403 ) );
+	}
+
 	// Brute-force lockout.
 	if ( claude_bridge_is_locked_out( $ip ) ) {
 		return new WP_Error( 'locked_out', 'Too many failed attempts. Try again later.', array( 'status' => 429 ) );
@@ -233,6 +242,30 @@ function claude_bridge_check_auth( WP_REST_Request $request ) {
 
 	claude_bridge_clear_fails( $ip );
 	return true;
+}
+
+/**
+ * Allowed client IPs. Merges the wp-config constant CLAUDE_BRIDGE_IP_ALLOWLIST
+ * (comma/space/newline separated) with the admin option, plus a filter hook.
+ * Empty result = no IP restriction (token-only auth).
+ */
+function claude_bridge_ip_allowlist() {
+	$raw = array();
+	if ( defined( 'CLAUDE_BRIDGE_IP_ALLOWLIST' ) && CLAUDE_BRIDGE_IP_ALLOWLIST ) {
+		$raw[] = (string) CLAUDE_BRIDGE_IP_ALLOWLIST;
+	}
+	$opt = get_option( CLAUDE_BRIDGE_OPT_ALLOWLIST, '' );
+	if ( $opt ) {
+		$raw[] = (string) $opt;
+	}
+	$list = array();
+	foreach ( $raw as $chunk ) {
+		foreach ( preg_split( '/[\s,]+/', $chunk, -1, PREG_SPLIT_NO_EMPTY ) as $ip ) {
+			$list[] = trim( $ip );
+		}
+	}
+	$list = array_values( array_unique( array_filter( $list ) ) );
+	return apply_filters( 'claude_bridge_ip_allowlist', $list );
 }
 
 function claude_bridge_is_local_ip( $ip ) {
