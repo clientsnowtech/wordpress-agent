@@ -1,8 +1,8 @@
 {
   "name": "WP Claude Agent",
-  "slug": "claude-bridge",
+  "slug": "wp-claude-agent",
   "version": "1.2.0",
-  "download_url": "https://github.com/clientsnowtech/wordpress-agent/releases/download/v1.2.0/claude-bridge.zip",
+  "download_url": "https://github.com/clientsnowtech/wordpress-agent/releases/download/v1.2.0/wp-claude-agent.zip",
   "homepage": "https://clientsnow.in",
   "author": "ClientsNow",
   "requires": "5.8",

@@ -33,7 +33,7 @@ Restart Claude Code (MCP tools load on restart, not mid-session), then ask Claud
 ## Parts
 
 ```
-wp-plugin/claude-bridge/claude-bridge.php   ← install on the WordPress site
+wp-plugin/wp-claude-agent/wp-claude-agent.php   ← install on the WordPress site
 mcp-server/                                 ← MCP server Claude Code loads locally
 ```
 
@@ -51,7 +51,7 @@ Claude Code  ──stdio──►  MCP server (Node)  ──HTTPS + Bearer token
 ## Setup
 
 ### 1. Install the plugin on the WordPress site
-- Copy the `wp-plugin/claude-bridge/` folder into `wp-content/plugins/` on the site
+- Copy the `wp-plugin/wp-claude-agent/` folder into `wp-content/plugins/` on the site
   (or zip it and upload via **Plugins → Add New → Upload**).
 - Activate **Claude Bridge**.
 
