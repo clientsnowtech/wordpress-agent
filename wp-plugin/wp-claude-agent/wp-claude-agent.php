@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WP Claude Agent
  * Description: Connects this WordPress site to Claude Code via a session token + REST API. Lets Claude read/write files, run DB queries, eval PHP, manage plugins/options, and upload media. FULL POWER — use only on sites you own.
- * Version: 1.4.0
+ * Version: 1.4.2
  * Author: ClientsNow
  * License: GPL-2.0+
  */
@@ -28,7 +28,7 @@ define( 'CLAUDE_BRIDGE_DEFAULT_TTL', 8 * HOUR_IN_SECONDS );        // session le
 define( 'CLAUDE_BRIDGE_LOG_MAX', 60 );                             // audit entries kept
 define( 'CLAUDE_BRIDGE_MAX_FAILS', 8 );                            // failed token tries...
 define( 'CLAUDE_BRIDGE_LOCKOUT', 15 * MINUTE_IN_SECONDS );         // ...before IP lockout
-define( 'CLAUDE_BRIDGE_VERSION', '1.4.0' );                        // keep in sync with header
+define( 'CLAUDE_BRIDGE_VERSION', '1.4.2' );                        // keep in sync with header
 
 /* -------------------------------------------------------------------------
  * Self-hosted auto-update (polls a channel.json manifest)
@@ -92,7 +92,28 @@ function claude_bridge_is_locked_out( $ip ) {
 function claude_bridge_clear_fails( $ip = null ) {
 	if ( $ip ) {
 		delete_transient( claude_bridge_fail_key( $ip ) );
+		return 1;
 	}
+	// No IP: wipe every fail/lockout transient for this plugin.
+	global $wpdb;
+	$like    = $wpdb->esc_like( '_transient_claude_bridge_fails_' ) . '%';
+	$tlike   = $wpdb->esc_like( '_transient_timeout_claude_bridge_fails_' ) . '%';
+	$deleted = (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s", $like, $tlike ) );
+	wp_cache_flush();
+	return $deleted;
+}
+
+function claude_bridge_count_locked_ips() {
+	global $wpdb;
+	$like = $wpdb->esc_like( '_transient_claude_bridge_fails_' ) . '%';
+	$rows = $wpdb->get_results( $wpdb->prepare( "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE %s", $like ), ARRAY_A );
+	$locked = 0;
+	foreach ( (array) $rows as $r ) {
+		if ( (int) $r['option_value'] >= CLAUDE_BRIDGE_MAX_FAILS ) {
+			$locked++;
+		}
+	}
+	return array( 'tracked' => count( (array) $rows ), 'locked' => $locked );
 }
 
 /* -------------------------------------------------------------------------
@@ -190,6 +211,11 @@ function claude_bridge_get_bearer( WP_REST_Request $request ) {
 }
 
 function claude_bridge_check_auth( WP_REST_Request $request ) {
+	// Belt-and-braces: emit no-cache headers on every bridge auth check so
+	// LiteSpeed / Cloudflare / browser never cache REST responses, including
+	// auth-rejection (403/401) responses.
+	nocache_headers();
+
 	$ip = claude_bridge_client_ip();
 
 	// Master kill switch.
@@ -326,6 +352,9 @@ add_action( 'rest_api_init', function () {
 		register_rest_route( CLAUDE_BRIDGE_NS, $path, array(
 			'methods'             => $methods,
 			'callback'            => function ( $request ) use ( $cb, $path ) {
+				// Never let upstream caches (LiteSpeed, Cloudflare, browser) keep
+				// REST responses — would leak privileged data to later unauthenticated callers.
+				nocache_headers();
 				// Log the op (without full payloads) then run it.
 				$p = $request->get_param( 'path' );
 				$detail = array();
@@ -720,12 +749,17 @@ function claude_bridge_admin_page() {
 					$provided = bin2hex( random_bytes( 24 ) ); // generate when left blank
 				}
 				update_option( CLAUDE_BRIDGE_OPT_STATIC, $provided, false );
+				claude_bridge_clear_fails(); // rotating the token implies prior fails are stale
 				claude_bridge_log( 'token.static_set', array(), 'admin' );
 				$new_static = $provided;
 				break;
 			case 'cleartoken':
 				delete_option( CLAUDE_BRIDGE_OPT_STATIC );
 				claude_bridge_log( 'token.static_clear', array(), 'admin' );
+				break;
+			case 'unlock':
+				$cleared = claude_bridge_clear_fails();
+				claude_bridge_log( 'lockout.cleared', array( 'rows' => $cleared ), 'admin' );
 				break;
 		}
 	}
@@ -743,6 +777,10 @@ function claude_bridge_admin_page() {
 	$manifest   = (string) get_option( CLAUDE_BRIDGE_OPT_MANIFEST, '' );
 	$static_set = (string) get_option( CLAUDE_BRIDGE_OPT_STATIC, '' ) !== '';
 	$static_const = defined( 'CLAUDE_BRIDGE_STATIC_TOKEN' ) && CLAUDE_BRIDGE_STATIC_TOKEN;
+	$client_ip  = claude_bridge_client_ip();
+	$self_fails = (int) get_transient( claude_bridge_fail_key( $client_ip ) );
+	$self_locked = $self_fails >= CLAUDE_BRIDGE_MAX_FAILS;
+	$lock_stats = claude_bridge_count_locked_ips();
 	?>
 	<style>
 		.cb-wrap{max-width:920px}
@@ -786,6 +824,28 @@ function claude_bridge_admin_page() {
 				<div>Locked to client</div><div><?php echo $owner ? '<code>' . esc_html( $owner ) . '</code>' : '<span class="cb-badge cb-warn">unclaimed</span> <span style="color:#777">first caller claims it</span>'; ?></div>
 				<div>Transport</div><div><?php echo $is_https ? '<span class="cb-badge cb-on">HTTPS</span>' : '<span class="cb-badge cb-bad">HTTP</span> <span style="color:#b32d2e">insecure for remote use</span>'; ?></div>
 				<div>API base URL</div><div><code><?php echo esc_html( $base_url ); ?></code></div>
+				<div>Your IP</div><div>
+					<code><?php echo esc_html( $client_ip ); ?></code>
+					<?php if ( $self_locked ) : ?>
+						<span class="cb-badge cb-bad">locked out (<?php echo (int) $self_fails; ?> fails)</span>
+					<?php elseif ( $self_fails > 0 ) : ?>
+						<span class="cb-badge cb-warn"><?php echo (int) $self_fails; ?>/<?php echo (int) CLAUDE_BRIDGE_MAX_FAILS; ?> bad attempts</span>
+					<?php endif; ?>
+				</div>
+				<div>Lockouts</div><div>
+					<?php if ( $lock_stats['locked'] > 0 ) : ?>
+						<span class="cb-badge cb-bad"><?php echo (int) $lock_stats['locked']; ?> IP(s) locked</span>
+					<?php else : ?>
+						<span class="cb-badge cb-on">none</span>
+					<?php endif; ?>
+					<?php if ( $lock_stats['tracked'] > 0 ) : ?>
+					<form method="post" style="display:inline;margin-left:8px">
+						<?php wp_nonce_field( 'claude_bridge_nonce' ); ?>
+						<input type="hidden" name="claude_bridge_action" value="unlock" />
+						<button class="button button-small">Clear all lockouts</button>
+					</form>
+					<?php endif; ?>
+				</div>
 			</div>
 		</div>
 
