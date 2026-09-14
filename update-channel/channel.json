@@ -1,16 +1,17 @@
 {
   "name": "WP Claude Agent",
   "slug": "wp-claude-agent",
-  "version": "1.4.2",
-  "download_url": "https://github.com/clientsnowtech/wordpress-agent/releases/download/v1.4.2/wp-claude-agent.zip",
+  "version": "1.5.0",
+  "download_url": "https://github.com/clientsnowtech/wordpress-agent/releases/download/v1.5.0/wp-claude-agent.zip",
+  "checksum": "379bdc1517fedb9fc4d46cd0abb282c333ab5757a1410f6e3c8c3703d8303e1b",
   "homepage": "https://clientsnow.in",
   "author": "ClientsNow",
   "requires": "5.8",
   "tested": "6.7",
   "requires_php": "7.4",
-  "last_updated": "2026-05-25 00:00:00",
+  "last_updated": "2026-09-14 00:00:00",
   "sections": {
     "description": "Connects this WordPress site to Claude Code via a session token + REST API.",
-    "changelog": "<h4>1.4.2</h4><ul><li>Security: emit <code>nocache_headers()</code> on every Claude Bridge REST request (incl. auth-rejection paths). Prevents LiteSpeed/Cloudflare/browser from caching a privileged 200 response and re-serving it to later unauthenticated callers.</li></ul><h4>1.4.1</h4><ul><li>Lockout fixes: rotating a token now clears stale brute-force fails. Admin status panel shows current IP, fail count and lockout state, with a one-click <em>Clear all lockouts</em> button.</li></ul><h4>1.4.0</h4><ul><li>Configure everything from the admin page (no wp-config/cPanel): Allowed IPs, permanent token, and update manifest URL.</li></ul><h4>1.3.0</h4><ul><li>Static token mode: set a permanent token via the CLAUDE_BRIDGE_STATIC_TOKEN wp-config constant (no expiry, no single-client lock); access still gated by the IP allowlist.</li></ul><h4>1.2.0</h4><ul><li>Renamed to WP Claude Agent.</li><li>IP allowlist: lock the bridge to specific IPs via the CLAUDE_BRIDGE_IP_ALLOWLIST wp-config constant.</li></ul><h4>1.1.0</h4><ul><li>Self-hosted auto-update via channel.json.</li><li>Per-site changelog on the MCP side.</li></ul>"
+    "changelog": "<h4>1.5.0</h4><ul><li>Updates now come from the Powerhouse update server and are verified before they install: SHA-256 checksum, HTTPS from that server, and the zip must really be this plugin at the advertised version.</li><li>Security: the update source can no longer be changed through a WordPress option (options are writable through this plugin&#8217;s REST API, so a short-lived token could redirect every future update). The Update manifest URL setting is removed; override with <code>CLAUDE_BRIDGE_UPDATE_ORIGIN</code> in wp-config.php.</li><li>Updates work with no configuration, and are actually offered: the previous check silently skipped new versions on a normal WordPress update check.</li><li>Updates panel under Tools &rarr; WP Claude Agent, Check for updates on the Plugins screen, automatic-updates switch.</li></ul><h4>1.4.2</h4><ul><li>Security: emit <code>nocache_headers()</code> on every Claude Bridge REST request (incl. auth-rejection paths). Prevents LiteSpeed/Cloudflare/browser from caching a privileged 200 response and re-serving it to later unauthenticated callers.</li></ul><h4>1.4.1</h4><ul><li>Lockout fixes: rotating a token now clears stale brute-force fails. Admin status panel shows current IP, fail count and lockout state, with a one-click <em>Clear all lockouts</em> button.</li></ul><h4>1.4.0</h4><ul><li>Configure everything from the admin page (no wp-config/cPanel): Allowed IPs, permanent token, and update manifest URL.</li></ul><h4>1.3.0</h4><ul><li>Static token mode: set a permanent token via the CLAUDE_BRIDGE_STATIC_TOKEN wp-config constant (no expiry, no single-client lock); access still gated by the IP allowlist.</li></ul><h4>1.2.0</h4><ul><li>Renamed to WP Claude Agent.</li><li>IP allowlist: lock the bridge to specific IPs via the CLAUDE_BRIDGE_IP_ALLOWLIST wp-config constant.</li></ul><h4>1.1.0</h4><ul><li>Self-hosted auto-update via channel.json.</li><li>Per-site changelog on the MCP side.</li></ul>"
   }
 }
