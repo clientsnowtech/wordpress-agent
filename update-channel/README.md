@@ -1,5 +1,13 @@
 # WP Claude Agent — update channel
 
+> **From 1.5.0 the plugin updates from the Powerhouse server**
+> (`https://powerhouse.clientsnow.in/api/plugin-update.php?slug=wp-claude-agent`),
+> verified by SHA-256, and its source of releases is `wp-plugin/wp-claude-agent/`
+> in the Powerhouse repo. This GitHub channel only exists to move sites still on
+> 1.4.x onto 1.5.0 — their updater reads `channel.json` here. **Do not publish
+> further versions to this channel**; release them from the Powerhouse repo.
+> The notes below describe the 1.4.x flow and are kept for reference.
+
 Self-hosted auto-update for the WP Claude Agent plugin, hosted on GitHub.
 WordPress polls the manifest, sees a newer version, and shows the normal
 **Update now** button.

@@ -2,9 +2,12 @@
 /**
  * Plugin Name: WP Claude Agent
  * Description: Connects this WordPress site to Claude Code via a session token + REST API. Lets Claude read/write files, run DB queries, eval PHP, manage plugins/options, and upload media. FULL POWER — use only on sites you own.
- * Version: 1.4.2
+ * Version: 1.5.0
  * Author: ClientsNow
  * License: GPL-2.0+
+ * Requires at least: 5.8
+ * Requires PHP: 7.4
+ * Update URI: https://powerhouse.clientsnow.in/api/plugin-update.php
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -20,7 +23,7 @@ define( 'CLAUDE_BRIDGE_OPT_ENABLED', 'claude_bridge_enabled' );    // master kil
 define( 'CLAUDE_BRIDGE_OPT_REQUIRE_HTTPS', 'claude_bridge_require_https' );
 define( 'CLAUDE_BRIDGE_OPT_ALLOWLIST', 'claude_bridge_ip_allowlist' );  // IP allowlist (admin/option)
 define( 'CLAUDE_BRIDGE_OPT_STATIC', 'claude_bridge_static_token' );    // permanent token (admin/option)
-define( 'CLAUDE_BRIDGE_OPT_MANIFEST', 'claude_bridge_manifest_url' );  // update manifest URL (admin/option)
+define( 'CLAUDE_BRIDGE_OPT_MANIFEST', 'claude_bridge_manifest_url' );  // 1.4.x only: no longer read, removed on admin_init
 define( 'CLAUDE_BRIDGE_OPT_LOG', 'claude_bridge_audit_log' );      // recent operations
 define( 'CLAUDE_BRIDGE_OPT_BACKUPS', 'claude_bridge_backups' );    // file-change backup index
 define( 'CLAUDE_BRIDGE_BACKUP_MAX', 100 );                        // backups kept
@@ -28,16 +31,36 @@ define( 'CLAUDE_BRIDGE_DEFAULT_TTL', 8 * HOUR_IN_SECONDS );        // session le
 define( 'CLAUDE_BRIDGE_LOG_MAX', 60 );                             // audit entries kept
 define( 'CLAUDE_BRIDGE_MAX_FAILS', 8 );                            // failed token tries...
 define( 'CLAUDE_BRIDGE_LOCKOUT', 15 * MINUTE_IN_SECONDS );         // ...before IP lockout
-define( 'CLAUDE_BRIDGE_VERSION', '1.4.2' );                        // keep in sync with header
+define( 'CLAUDE_BRIDGE_VERSION', '1.5.0' );                        // keep in sync with header
 
 /* -------------------------------------------------------------------------
- * Self-hosted auto-update (polls a channel.json manifest)
+ * Over-the-air updates from the Powerhouse release server (checksum-verified)
+ *
+ * This plugin grants full control of the site, so whoever controls its update
+ * source controls the site. The source is therefore fixed: the Powerhouse
+ * server, or CLAUDE_BRIDGE_UPDATE_ORIGIN in wp-config.php. It is deliberately
+ * not a WordPress option: options can be written through this plugin's own
+ * REST API, which would let a short-lived token plant a permanent update source.
  * ---------------------------------------------------------------------- */
-require_once __DIR__ . '/includes/updater.php';
+require_once __DIR__ . '/includes/class-ota-updater.php';
+Claude_Bridge_OTA_Updater::init(
+	array(
+		'file'            => __FILE__,
+		'slug'            => 'wp-claude-agent',
+		'name'            => 'WP Claude Agent',
+		'prefix'          => 'claude_bridge',
+		'origin_constant' => 'CLAUDE_BRIDGE_UPDATE_ORIGIN',
+		'settings_url'    => admin_url( 'tools.php?page=claude-bridge' ),
+	)
+);
+
+// 1.4.x kept an update-manifest URL in an option. It is no longer read; remove it.
 add_action(
-	'init',
+	'admin_init',
 	function () {
-		new Claude_Bridge_Updater( __FILE__, CLAUDE_BRIDGE_VERSION );
+		if ( false !== get_option( CLAUDE_BRIDGE_OPT_MANIFEST, false ) ) {
+			delete_option( CLAUDE_BRIDGE_OPT_MANIFEST );
+		}
 	}
 );
 
@@ -741,7 +764,6 @@ function claude_bridge_admin_page() {
 				break;
 			case 'settings':
 				update_option( CLAUDE_BRIDGE_OPT_ALLOWLIST, sanitize_text_field( wp_unslash( $_POST['allowlist'] ?? '' ) ), false );
-				update_option( CLAUDE_BRIDGE_OPT_MANIFEST, esc_url_raw( wp_unslash( $_POST['manifest'] ?? '' ) ), false );
 				break;
 			case 'settoken':
 				$provided = trim( (string) wp_unslash( $_POST['static_token'] ?? '' ) );
@@ -774,7 +796,6 @@ function claude_bridge_admin_page() {
 	$mcp_path   = wp_normalize_path( WP_PLUGIN_DIR ); // hint only
 	$log        = array_reverse( (array) get_option( CLAUDE_BRIDGE_OPT_LOG, array() ) );
 	$allowlist  = (string) get_option( CLAUDE_BRIDGE_OPT_ALLOWLIST, '' );
-	$manifest   = (string) get_option( CLAUDE_BRIDGE_OPT_MANIFEST, '' );
 	$static_set = (string) get_option( CLAUDE_BRIDGE_OPT_STATIC, '' ) !== '';
 	$static_const = defined( 'CLAUDE_BRIDGE_STATIC_TOKEN' ) && CLAUDE_BRIDGE_STATIC_TOKEN;
 	$client_ip  = claude_bridge_client_ip();
@@ -945,8 +966,6 @@ function claude_bridge_admin_page() {
 				<input type="hidden" name="claude_bridge_action" value="settings" />
 				<p style="margin:0 0 4px"><strong>Allowed IPs</strong> <span style="color:#777;font-size:12px">— comma-separated. When set, only these IPs can connect (even with a valid token). Leave blank for no IP limit.</span></p>
 				<input type="text" name="allowlist" class="regular-text" value="<?php echo esc_attr( $allowlist ); ?>" placeholder="e.g. 106.201.228.92, 1.2.3.4" style="width:100%;max-width:560px" />
-				<p style="margin:14px 0 4px"><strong>Update manifest URL</strong> <span style="color:#777;font-size:12px">— for plugin auto-update. Usually the channel.json raw URL.</span></p>
-				<input type="url" name="manifest" class="regular-text" value="<?php echo esc_attr( $manifest ); ?>" placeholder="https://raw.githubusercontent.com/.../channel.json" style="width:100%;max-width:560px" />
 				<br><?php submit_button( 'Save settings', 'primary', 'submit', false ); ?>
 			</form>
 		</div>
@@ -965,6 +984,8 @@ function claude_bridge_admin_page() {
 				Token is SHA-256 hashed at rest and compared in constant time.
 			</p>
 		</div>
+
+		<?php Claude_Bridge_OTA_Updater::render_panel(); ?>
 
 		<!-- CAPABILITIES -->
 		<div class="cb-card">
